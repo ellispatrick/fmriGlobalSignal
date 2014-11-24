@@ -1,0 +1,446 @@
+\documentclass[a4paper]{article}
+% setting very small margins
+\usepackage{fullpage}
+
+\begin{document}
+
+\title{``Global signal" simulation}
+%\author{Ellis Patrick with modification from Jean}
+\maketitle
+
+<<setup, echo=FALSE>>=
+set.seed(12345, kind="L'Ecuyer-CMRG")
+wdir = "."
+library(MASS)
+library(QUIC)
+library(ggplot2)
+opts_knit$set(upload.fun = imgur_upload, root.dir = wdir)
+opts_chunk$set(echo=FALSE, fig.keep='high', fig.path="GSFigs/GS", 
+               dev=c('pdf', 'png'), cache=FALSE,fig.align='center',fig.width=6,fig.height=5 )
+@
+
+\section{Abstract}
+
+\subsubsection*{Background}
+Global Signal normalisation/correction/modelling/removal is a step often performed in fMRI analysis to remove/model signal in the bold that appears to be affecting all voxels. It had been hypothesised that this ``global signal" could be being driven by a particular region of the brain and should be accounted for in a similar way that cardiovascular and respiration effects are. 
+
+\subsubsection*{Methods}
+We will use simple simulations to evaluate three approaches for identifying connections/assocations between voxels in the brain. The simulations consider a scenario where there is no global signal and a scenario where there is a super-imposed  uniform global signal. The three approaches that will be assessed are correlation, partial correlation and correlation after global signal removal. These approaches will be evaluated using density plots and ROC plots. The density plots demonstrate each methods ability to capture the true simulated associations while the ROC plots assess the capability of each method to separate the true non-zero assocations from the non-existant ones. In terms of network construction, the latter is often more important than the former.
+
+\subsubsection*{Conclusions}
+We have demonstrated that global signal removal can have adverse effects to the interpretation of correlations between voxels. This is demonstrated in simulations with and without a super-imposed global signal. Specifically, global signal regression can shift true zero correlations to be negative. 
+
+
+<<>>=
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  require(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+@
+
+\section{A simplified brain.}
+
+In order to understand the effects of global signal removal we will consider a simple abstract model of a brain.
+We will start by assuming that our brain can be divided up into forty voxels. However these voxels will potentially interact with each other. For simplicity we will assume that these voxels interact in such a way that they can be divided up into four independent sub-networks. In two of the sub-networks the voxels will have pairwise correlations of 0.4, in two pairwise correlations of 0.2 and elsewhere zero. The correlation matrix can then be constructed in a block structure as shown in Figure \ref{fig:BlockMatrix}.
+
+<<BlockMatrix,out.width="0.7\\textwidth",fig.cap="A 2D representation of the correlation matrix that will be used to simulate correlated BOLD signals. The correlation matrix consists of four sub-networks. The correlations within these subworks are uniformly either 0.4 or 0.2. All correlations between voxels outside of these sub-networks are zero. ">>=
+
+trueCOR = matrix(0,40,40)
+trueCOR[1:10,1:10] = 0.4
+trueCOR[11:20,11:20] = 0.2
+trueCOR[21:30,21:30] = 0.4
+trueCOR[31:40,31:40] = 0.2
+diag(trueCOR) = NA
+
+source("myImagePlot.R")
+myImagePlot(trueCOR)
+diag(trueCOR) = 1
+tpCOR = -cov2cor(solve(trueCOR))
+tp1 = tpCOR[1,2]
+tp2 = tpCOR[11,12]
+
+@
+
+\section{Simulations}
+In all of the following, a series of simulated BOLD signals will be generated.  A Multivariate normal distribution is used to generate 1000 observations of the 40 voxels, where the expected values of all voxels are 100 and covariance matrix equal to the correlation matrix as described in Figure \ref{fig:BlockMatrix}.
+
+\subsection{No global signal}
+The first simulation is a simulation where no global signal has been superimposed over the true correlation structure. Figure \ref{fig:DensityNoGS} plots the densities of the empirical correlations, partial correlations and correlations after GS removal. In this figure it can be observed that all of the global signal correlations have been shifted in a negative direction. However, while these correlations have been shifted they still separate into the correlations that were 0, 0.2 and 0.4 in the true correlation matrix. Here we also observed that while the empirical partial correlations are centered around their true values, their spreads are such that there is some overlap in their densities. This is an illustration of the variability introduced when trying to estimate partial correlations, as while the correlations only use information from two voxels, the partial correlations use information from all of the voxels.
+ 
+
+<<DensityNoGS,fig.cap='The densities of the empirical correlations, partial correlations and correlations after GS removal are plotted for a simulation without a superimposed global signal. Correlations are labelled as to whether they were 0, 0.2 or 0.4 in the true correlation matrix that was used to generate them.'>>=
+n = 1000
+X = mvrnorm(n,rep(100,40),trueCOR)
+
+empCor = cor(X)
+invCor = solve(empCor)
+partCor = -cov2cor(invCor)
+diag(partCor)=0
+
+GS = rowSums(X)%*%t(colSums(X))/sum(X)
+gsCor = cor(X-GS)
+
+MAX = max(c(gsCor[gsCor!=1],empCor[empCor!=1]))
+MIN = min(c(gsCor[gsCor!=1],empCor[empCor!=1]))
+
+# Density plots with means
+tcdf = data.frame(cond = as.factor(c(0,0.2,0.4)), eC.mean = c(0,0.2,0.4))
+tpcdf = data.frame(cond =as.factor(c(0,0.2,0.4)), eC.mean = c(0,tp2,tp1))
+
+df = data.frame(eC = as.vector(empCor[row(empCor)!=col(empCor)]), partCor = as.vector(partCor[row(empCor)!=col(empCor)]), 
+                gsCor = as.vector(cor(X-GS)[row(empCor)!=col(empCor)]), cond=as.factor(trueCOR[row(empCor)!=col(empCor)]))
+
+p1 = ggplot(df, aes(x=eC, colour=cond)) + geom_density() +
+     geom_vline(data=tcdf, aes(xintercept=eC.mean,  colour=cond),
+               linetype="dashed", size=1) +  xlab("Correlations") +theme_bw()+ labs(colour = "True \n correlation")+xlim(MIN,MAX)
+
+p2 = ggplot(df, aes(x=partCor, colour=cond)) + geom_density() +
+  geom_vline(data=tpcdf, aes(xintercept=eC.mean,  colour=cond),
+               linetype="dashed", size=1) + xlab("Partial Correlations")+theme_bw()+ labs(colour = "True \n correlation")
+
+p3 = ggplot(df, aes(x=gsCor, colour=cond)) + geom_density() +
+     geom_vline(data=tcdf, aes(xintercept=eC.mean,  colour=cond),
+               linetype="dashed", size=1) +
+  xlab("Global Signal Removed Correlations")+theme_bw()+ labs(colour = "True \n correlation")+xlim(MIN,MAX)
+
+multiplot(p1,p3,p2)
+
+@
+
+To further assess the ability of each method to recapture the truth the empirical correlations, partial correlations and correlations after GS removal are plotted against the true correlations or parital correlations in Figure \ref{fig:dotPlotNoGS}.  In this figure it can be observed that while the empirical correlations and partial correlations do a good job of recovering the truth, the correlations after global signal removal have been shifted in a negative direction. In addition to the this the correlations with true correlation 0.4 have shifted further than those with true correlation 0.2.
+
+<<dotPlotNoGS,fig.cap='The empirical correlations, partial correlations and correlations after GS removal from a simulation without superimposed global signal are plotted against their true values. The black dotted line is the y=x line. The blue dashed line is the line of best fit from a linear regression.'>>=
+df = data.frame(eC = as.vector(empCor[row(empCor)!=col(empCor)]), partCor = as.vector(partCor[row(empCor)!=col(empCor)]), 
+                gsCor = as.vector(cor(X-GS)[row(empCor)!=col(empCor)]), cond=as.factor(trueCOR[row(empCor)!=col(empCor)]),
+                trueCor=trueCOR[row(empCor)!=col(empCor)],tpCor=tpCOR[row(empCor)!=col(empCor)]) 
+
+
+p1 = ggplot(df, aes(y=eC, x=trueCor, colour=cond)) + geom_point(shape = 1,size = 4)+
+     xlab('True correlation') + ylab('Correlation')+ geom_abline(colour="black",linetype = 'dotted') +  geom_smooth(aes(y=eC, x=trueCor,group = 1),method="lm",se=FALSE,linetype = "dashed")+theme_bw()+ labs(colour = "True \n correlation")+ylim(MIN,MAX)
+
+
+p2 = ggplot(df, aes(y=partCor, x=tpCor, colour=cond)) + geom_point(shape = 1,size = 4)+
+     xlab('True partial correlation') + ylab('Partial correlation')+ geom_abline(colour="black",linetype = 'dotted')+ geom_smooth(aes(y=partCor, x=tpCor,group = 1),method="lm",se = FALSE,linetype = 'dashed')+theme_bw() + labs(colour = "True \n correlation")
+
+p3 = ggplot(df, aes(y=gsCor, x=trueCor, colour=cond)) + geom_point(shape = 1,size = 4)+
+     xlab('True correlation') + ylab('GSr correlation')+ 
+  geom_abline(colour="black",linetype = 'dotted')+
+ geom_smooth(aes(y=gsCor, x=trueCor,group = 1),method="lm",se=FALSE,linetype = 'dashed')+theme_bw()+ labs(colour = "True \n correlation")+ylim(MIN,MAX)
+
+multiplot(p1,p3,p2)
+
+@
+
+The ability of each method to separate the correlations that are zero in truth from those that are non-zero is assessed in Figure \ref{ROCnoGS}. In these plots the rate at which true non-zero correlations were detected as non-zero (true positive rate, TPR) are plotted against  the rate at which true zero correlations were detected as non-zero (false positive rate, FPR). Here we can see the empirical correlations perfectly split the true non-zero correlations from the true zero correlations. As the spreads of the partial correlations are quite large, observed in Figure \ref{fig:DensityNoGS}, the partial correlations are not able to always separate the non-zero correlations from the trully zero correlations. The global signal removed correlations split perfectly if ranking correlations from positive to negatative however, if the sign of the correlation is ignored the global signal removed correlations perform similarly to the partial correlations. 
+
+<<ROCnoGS,fig.cap='ROC plot assessing the ability of the empirical correlations, partial correlations and correlations after GS removal to separate the true zero correlations the a) true positive correlations b) true non-zero correlations. Plotted here are the true positive rates (TPR), or the rate at which true non-zero correlations were detected as non-zero, against the false positive rates (FPR), or the rate at which true zero correlations were detected as non-zero, from a simulation without superimposed global signal.'>>=
+
+TPR = function(x){
+  x = as.vector(x)
+  names(x) = paste('a',1:length(x),sep = '')
+  TRUEDE = names(x)[as.vector(trueCOR!=0&trueCOR!=1)]
+  NOTDE = names(x)[as.vector(trueCOR==0&trueCOR!=1)]
+  cumsum(names(sort(x))%in%TRUEDE)/sum(names(x)%in%TRUEDE)}
+FPR = function(x){
+  x = as.vector(x)
+  names(x) = paste('a',1:length(x),sep = '')
+  TRUEDE = names(x)[as.vector(trueCOR!=0&trueCOR!=1)]
+  NOTDE = names(x)[as.vector(trueCOR==0&trueCOR!=1)]
+  cumsum(names(sort(x))%in%NOTDE)/sum(names(x)%in%NOTDE)}
+
+
+df = data.frame(FPR = c(FPR(-empCor),FPR(-partCor),FPR(-gsCor)), TPR = c(TPR(-empCor),TPR(-partCor),TPR(-gsCor)), cond=as.factor(c(rep('Empirical Correlations',length(FPR(-empCor))),rep('Partial Correlations',length(FPR(-empCor))),rep('GSr Correlations',length(FPR(-empCor))))))
+
+p1 = ggplot(df, aes(x=FPR, y= TPR, colour=cond)) + geom_line(aes(linetype=cond), # Line type depends on cond
+              size = 1)  +  ggtitle('a) ROC of positive correlations') +theme_bw()+ labs(colour="Method",linetype="Method")
+
+df2 = data.frame(FPR = c(FPR(-abs(empCor)),FPR(-abs(partCor)),FPR(-abs(gsCor))), TPR = c(TPR(-abs(empCor)),TPR(-abs(partCor)),TPR(-abs(gsCor))), cond=as.factor(c(rep('Empirical Correlations',length(FPR(-empCor))),rep('Partial Correlations',length(FPR(-empCor))),rep('GSr Correlations',length(FPR(-empCor))))))
+
+p2 = ggplot(df2, aes(x=FPR, y= TPR, colour=cond)) + geom_line(aes(linetype=cond), # Line type depends on cond
+              size = 1)  +  ggtitle('b) ROC of absolute correlations') +theme_bw()+ labs(colour="Method",linetype="Method")
+multiplot(p1,p2)
+
+
+@
+
+<<include=FALSE>>=
+AUC = function(x){
+  x = as.vector(x)
+  names(x) = paste('a',1:length(x),sep = '')
+  TRUEDE = names(x)[as.vector(trueCOR!=0&trueCOR!=1)]
+  NOTDE = names(x)[as.vector(trueCOR==0&trueCOR!=1)]
+  mean((cumsum(names(sort(x))%in%TRUEDE)/sum(names(x)%in%TRUEDE))[!names(sort(x))%in%TRUEDE])}
+
+ auc.noGS = data.frame(cor = AUC(-abs(empCor)),partial.cor = AUC(-abs(partCor)),GSr.cor = AUC(-abs(gsCor)))
+
+@
+
+
+\clearpage
+\subsection{Global Signal}
+
+We now consider adding in a Global Signal to the simulation. This global signal is simply generated from a normal distribution with mean five and standard deviation one and then superimposed onto a simulated BOLD signal described earlier. In this simulation the global signal is assumed to affect all regions of the brain uniformly. The densities of the empirical correlations, partial correlations and correlations after GS removal are plotted in Figure \ref{fig:DensityGS}. Here as potentially expected we find that the empirical correlations still split the true connections and non-existant connections well however they are now not centered around there ``true" values as a large amount of positive correlation has been introduced into the system. The global signal removed correlations however are much closer to there true values, although still have been shifted negatively. The partial correlations appear unaffected by this superimposed global signal in comparison to the previous simulation.
+
+In Figure \ref{fig:dotPlotGS} we again see that the global signal removed correlation exhibit a negative bias whilst the partial correlations on average are able to recapture their true values. In Figure \ref{fig:ROCGS} both the empirical correlations and global signal removed correlations are able to separate trully positive correlations from zero correlations. However, the global signal removed correlations now perform worse when separating true non-zero correlations from zero correlations.
+
+
+<<DensityGS,fig.cap='The densities of the empirical correlations, partial correlations and correlations after GS removal are plotted for a simulation with a superimposed global signal. Correlations are labelled as to whether they were 0, 0.2 or 0.4 in the true correlation matrix that was used to generate them.'>>=
+
+noise = 1
+x = matrix(rnorm(n,5),n,40)
+set.seed(12345, kind="L'Ecuyer-CMRG")
+X = mvrnorm(n,rep(100,40),trueCOR)+noise*x
+
+empCor = cor(X)
+invCor = solve(empCor)
+partCor = -cov2cor(invCor)
+diag(partCor)=0
+
+GS = rowSums(X)%*%t(colSums(X))/sum(X)
+gsCor = cor(X-GS)
+MAX = max(c(gsCor[gsCor!=1],empCor[empCor!=1]))
+MIN = min(c(gsCor[gsCor!=1],empCor[empCor!=1]))
+
+
+# Density plots with means
+tcdf = data.frame(cond = as.factor(c(0,0.2,0.4)), eC.mean = c(0,0.2,0.4))
+tpcdf = data.frame(cond =as.factor(c(0,0.2,0.4)), eC.mean = c(0,tp2,tp1))
+
+df = data.frame(eC = as.vector(empCor[row(empCor)!=col(empCor)]), partCor = as.vector(partCor[row(empCor)!=col(empCor)]), 
+                gsCor = as.vector(cor(X-GS)[row(empCor)!=col(empCor)]), cond=as.factor(trueCOR[row(empCor)!=col(empCor)]))
+
+p1 = ggplot(df, aes(x=eC, colour=cond)) + geom_density() +
+     geom_vline(data=tcdf, aes(xintercept=eC.mean,  colour=cond),
+               linetype="dashed", size=1) +  xlab("Correlations") +theme_bw()+ labs(colour = "True \n correlation")+xlim(MIN,MAX)
+
+p2 = ggplot(df, aes(x=partCor, colour=cond)) + geom_density() +
+  geom_vline(data=tpcdf, aes(xintercept=eC.mean,  colour=cond),
+               linetype="dashed", size=1) + xlab("Partial Correlations")+theme_bw()+ labs(colour = "True \n correlation")
+
+p3 = ggplot(df, aes(x=gsCor, colour=cond)) + geom_density() +
+     geom_vline(data=tcdf, aes(xintercept=eC.mean,  colour=cond),
+               linetype="dashed", size=1) +
+  xlab("Global Signal Removed Correlations")+theme_bw()+ labs(colour = "True \n correlation")+xlim(MIN,MAX)
+
+multiplot(p1,p3,p2)
+
+@
+
+<<dotPlotGS,fig.cap='The empirical correlations, partial correlations and correlations after GS removal from a simulation with a superimposed global signal are plotted against their true values. The black dotted line is the y=x line. The blue dashed line is the line of best fit from a linear regression.'>>=
+df = data.frame(eC = as.vector(empCor[row(empCor)!=col(empCor)]), partCor = as.vector(partCor[row(empCor)!=col(empCor)]), 
+                gsCor = as.vector(cor(X-GS)[row(empCor)!=col(empCor)]), cond=as.factor(trueCOR[row(empCor)!=col(empCor)]),
+                trueCor=trueCOR[row(empCor)!=col(empCor)],tpCor=tpCOR[row(empCor)!=col(empCor)]) 
+
+
+p1 = ggplot(df, aes(y=eC, x=trueCor, colour=cond)) + geom_point(shape = 1,size = 4)+
+     xlab('True correlation before superimposed GS') + ylab('Correlation')+ geom_abline(colour="black",linetype = 'dotted') +  geom_smooth(aes(y=eC, x=trueCor,group = 1),method="lm",se=FALSE,linetype = "dashed")+theme_bw()+ labs(colour = "True \n correlation")+ylim(MIN,MAX)
+
+
+p2 = ggplot(df, aes(y=partCor, x=tpCor, colour=cond)) + geom_point(shape = 1,size = 4)+
+     xlab('True partial correlation before superimposed GS') + ylab('Partial correlation')+ geom_abline(colour="black",linetype = 'dotted')+ geom_smooth(aes(y=partCor, x=tpCor,group = 1),method="lm",se = FALSE,linetype = 'dashed')+theme_bw() + labs(colour = "True \n correlation")
+
+p3 = ggplot(df, aes(y=gsCor, x=trueCor, colour=cond)) + geom_point(shape = 1,size = 4)+
+     xlab('True correlation before superimposed GS') + ylab('GSr correlation')+ 
+  geom_abline(colour="black",linetype = 'dotted')+
+ geom_smooth(aes(y=gsCor, x=trueCor,group = 1),method="lm",se=FALSE,linetype = 'dashed')+theme_bw()+ labs(colour = "True \n correlation")+ylim(MIN,MAX)
+#+  ggtitle("Global Signal Corrected Correlations")
+
+multiplot(p1,p3,p2)
+
+@
+
+<<ROCGS,fig.cap='ROC plot assessing the ability of the empirical correlations, partial correlations and correlations after GS removal to separate the true zero correlations the a) true positive correlations b) true non-zero correlations. Plotted here are the true positive rates (TPR), or the rate at which true non-zero correlations were detected as non-zero, against the false positive rates (FPR), or the rate at which true zero correlations were detected as non-zero, from a simulation with a superimposed global signal.'>>=
+
+TPR = function(x){
+  x = as.vector(x)
+  names(x) = paste('a',1:length(x),sep = '')
+  TRUEDE = names(x)[as.vector(trueCOR!=0&trueCOR!=1)]
+  NOTDE = names(x)[as.vector(trueCOR==0&trueCOR!=1)]
+  cumsum(names(sort(x))%in%TRUEDE)/sum(names(x)%in%TRUEDE)}
+FPR = function(x){
+  x = as.vector(x)
+  names(x) = paste('a',1:length(x),sep = '')
+  TRUEDE = names(x)[as.vector(trueCOR!=0&trueCOR!=1)]
+  NOTDE = names(x)[as.vector(trueCOR==0&trueCOR!=1)]
+  cumsum(names(sort(x))%in%NOTDE)/sum(names(x)%in%NOTDE)}
+
+
+df = data.frame(FPR = c(FPR(-empCor),FPR(-partCor),FPR(-gsCor)), TPR = c(TPR(-empCor),TPR(-partCor),TPR(-gsCor)), cond=as.factor(c(rep('Empirical Correlations',length(FPR(-empCor))),rep('Partial Correlations',length(FPR(-empCor))),rep('GSr Correlations',length(FPR(-empCor))))))
+
+p1 = ggplot(df, aes(x=FPR, y= TPR, colour=cond)) + geom_line(aes(linetype=cond), # Line type depends on cond
+              size = 1)  +  ggtitle('a) ROC of positive correlations') +theme_bw()+ labs(colour="Method",linetype="Method")
+
+df2 = data.frame(FPR = c(FPR(-abs(empCor)),FPR(-abs(partCor)),FPR(-abs(gsCor))), TPR = c(TPR(-abs(empCor)),TPR(-abs(partCor)),TPR(-abs(gsCor))), cond=as.factor(c(rep('Empirical Correlations',length(FPR(-empCor))),rep('Partial Correlations',length(FPR(-empCor))),rep('GSr Correlations',length(FPR(-empCor))))))
+
+p2 = ggplot(df2, aes(x=FPR, y= TPR, colour=cond)) + geom_line(aes(linetype=cond), # Line type depends on cond
+              size = 1)  +  ggtitle('b) ROC of absolute correlations') +theme_bw()+ labs(colour="Method",linetype="Method")
+multiplot(p1,p2)
+
+
+@
+
+<<include=FALSE>>=
+AUC = function(x){
+  x = as.vector(x)
+  names(x) = paste('a',1:length(x),sep = '')
+  TRUEDE = names(x)[as.vector(trueCOR!=0&trueCOR!=1)]
+  NOTDE = names(x)[as.vector(trueCOR==0&trueCOR!=1)]
+  mean((cumsum(names(sort(x))%in%TRUEDE)/sum(names(x)%in%TRUEDE))[!names(sort(x))%in%TRUEDE])}
+
+ auc.uniform = data.frame(cor = AUC(-abs(empCor)),partial.cor = AUC(-abs(partCor)),GSr.cor = AUC(-abs(gsCor)))
+
+@
+
+
+<<include=FALSE>>=
+
+auc = rbind(auc.noGS,auc.uniform)
+rownames(auc) = c('no GS','GS')
+library(xtable)
+auc = print(xtable(auc,caption="A table of the areas under the ROC curves for separating true non-zero from zero correlations. Two simulations are considered, one without a global signal and one with super-imposed global signal" ,label = 'auROC'))
+@
+
+\clearpage
+\subsection{Areas Under the ROC Curves}
+
+The information contained within the ROC curve plots from the previous simulations is summarised in Table \ref{auROC}. Table \ref{auROC} 
+ summarised the areas under the ROC curve (AUC) for the two simulations and three methods. The larger the AUC value the better the method was at separating non-zero from zero correlations. Here we observe that correlation performs best when there is no global signal and when there is uniform global signal. The performance of Partial correlations improves when there is a global signal. Global signal removal causes trully zero correlations to be shifted negative, this creates a difficulty in separating non-zero from zero correlations if sign is not considered.
+\Sexpr{auc}
+
+\clearpage
+\subsection{Relationship between average global signal and average correlation}
+
+We next consider the relationship between average global signal and average correlation. To do this we perform 50 simulations of the uniform global signal simulation described earlier, where in each of these simulations a different amount of global signal is super-imposed onto the simulations. These results are plotted in Figure \ref{fig:avgGSavgCOR}. Here it is observed that as the amount of global signal in the system increases so does the average correlation.
+
+<<avgGSavgCOR,fig.cap='A plot of the relationship between average global signal and average correlation for 50 simulations with varying amounts of super-imposed uniform global signal'>>=
+avgCor = avgGS = lambda =  NULL
+for(i in 1:15){
+x = matrix(rnorm(n,5),n,40)
+set.seed(12345, kind="L'Ecuyer-CMRG")
+lambda[i] = (i/10)
+X = mvrnorm(n,rep(100,40),trueCOR)+lambda[i]*x
+empCor = cor(X)
+avgCor[i] = mean(empCor[row(empCor)!=col(empCor)])
+avgGS[i] = mean(X)
+}
+
+df = data.frame(avgCor =avgCor, avgGS = avgGS, lambda = lambda)
+
+
+p1 = ggplot(df, aes(x=avgCor, y= avgGS)) + geom_point(shape=1)+ # Line type depends on cond
+                  ggtitle('Relationship between average global signal \n and average correlation') +theme_bw()+
+  ylab('Average global signal') + xlab('Average correlation')
+
+
+p1
+
+@
+
+
+
+<<GSCorandAmount,fig.cap='',fig.width=15,fig.height=5>>=
+avgCor = avgGS = lambda =  NULL
+for(i in 1:15){
+x = matrix(rnorm(n,5),n,40)
+set.seed(12345, kind="L'Ecuyer-CMRG")
+lambda[i] = (i/10)
+X = mvrnorm(n,rep(100,40),trueCOR)+lambda[i]*x
+empCor = cor(X)
+avgCor[i] = mean(empCor[row(empCor)!=col(empCor)])
+avgGS[i] = mean(X)
+}
+
+df = data.frame(avgCor =avgCor, avgGS = avgGS, lambda = lambda)
+
+p1 = ggplot(df, aes(x=lambda, y= avgGS)) + geom_point(shape=1)+ # Line type depends on cond
+                  ggtitle('Relationship between amount of super-imposed \n signal  and average global signal') +theme_bw()+
+  xlab('Amount of super-imposed signal') + ylab('Average global signal')
+
+p2 = ggplot(df, aes(x=lambda, y= avgCor)) + geom_point(shape=1)+ # Line type depends on cond
+                  ggtitle('Relationship between amount of super-imposed \n signal  and average correlation') +theme_bw()+
+  xlab('Amount of super-imposed signal') + ylab('Average correlation')
+
+p3 = ggplot(df, aes(x=avgCor, y= avgGS)) + geom_point(shape=1)+ # Line type depends on cond
+                  ggtitle('Relationship between average global signal \n and average correlation') +theme_bw()+
+  ylab('Average global signal') + xlab('Average correlation')
+
+
+multiplot(p1,p2,p3,layout = matrix(1:3,1,3))
+
+@
+
+
+
+<<GSCorandAmount2,fig.cap='',fig.width=15,fig.height=5>>=
+avgCor = avgGS = lambda =  NULL
+for(i in 1:50){
+x = matrix(rnorm(n,5),n,40)
+set.seed(12345, kind="L'Ecuyer-CMRG")
+lambda[i] = (i/10)
+X = mvrnorm(n,rep(100,40),trueCOR)+lambda[i]*x
+empCor = cor(X)
+avgCor[i] = mean(empCor[row(empCor)!=col(empCor)])
+avgGS[i] = mean(X)
+}
+
+df = data.frame(avgCor =avgCor, avgGS = avgGS, lambda = lambda)
+
+p1 = ggplot(df, aes(x=lambda, y= avgGS)) + geom_point(shape=1)+ # Line type depends on cond
+                  ggtitle('Relationship between amount of super-imposed \n signal  and average global signal') +theme_bw()+
+  xlab('Amount of super-imposed signal') + ylab('Average global signal')
+
+p2 = ggplot(df, aes(x=lambda, y= avgCor)) + geom_point(shape=1)+ # Line type depends on cond
+                  ggtitle('Relationship between amount of super-imposed \n signal  and average correlation') +theme_bw()+
+  xlab('Amount of super-imposed signal') + ylab('Average correlation')
+
+p3 = ggplot(df, aes(x=avgCor, y= avgGS)) + geom_point(shape=1)+ # Line type depends on cond
+                  ggtitle('Relationship between average global signal \n and average correlation') +theme_bw()+
+  ylab('Average global signal') + xlab('Average correlation')
+
+
+multiplot(p1,p2,p3,layout = matrix(1:3,1,3))
+
+@
+
+\end{document}
